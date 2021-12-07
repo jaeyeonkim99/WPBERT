@@ -4,10 +4,6 @@ import logging
 sys.path.append("/workspace/WPBERT/Shared_files/*")
 logger = logging.getLogger(__name__)
 
-# For Debugging
-# sys.argv.append(0)
-# sys.argv.append(0)
-
 os.environ["CUDA_VISIBLE_DEVICES"]=f"{sys.argv[2]}"
 
 import joblib

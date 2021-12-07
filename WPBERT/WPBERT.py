@@ -14,7 +14,6 @@ class CharBertEmbeddings(nn.Module):
 
         super(CharBertEmbeddings, self).__init__()
         self.config = config
-        self.char_emb_config = bert_charemb_config if not is_roberta else roberta_charemb_config
         self.char_embeddings = nn.Embedding(char_vocab_size, char_embedding_size, padding_idx=padding_idx)
                 
         self.rnn_layer = nn.GRU(input_size= int(config.hidden_size/2),\

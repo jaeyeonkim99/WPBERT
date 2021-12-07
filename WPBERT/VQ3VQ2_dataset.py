@@ -3,15 +3,13 @@ from torch.utils.data import Dataset
 
 import numpy as np
 import os
-import logging
 import collections
 import random
 
-class Embed_dataset(Dataset):
+class VQ3VQ2_dataset(Dataset):
 
-    token_pretrain_path = "/data/babymind/pretrained_models/ResDAVEnet323"
 
-    def __init__(self, datapath, logger = None, masked_lm = True, mlm_prob = 0.15, rng=None): 
+    def __init__(self, datapath, phone_type, logger = None, masked_lm = True, mlm_prob = 0.15, rng=None): 
         #datapath: get absolute path of directory as input
         super().__init__()
         self.datapath = datapath
@@ -25,7 +23,7 @@ class Embed_dataset(Dataset):
         self.padding =1027
 
         self.phone_padding = 1024
-        
+
         if rng==None: 
             self.rng = random.Random(100)
         else: self.rng = rng 
@@ -124,14 +122,12 @@ class Embed_dataset(Dataset):
 
         masked_lm_labels = [-1] * len(tokens)
         for p in masked_lms:
-            #masked_lm_positions.append(p.index)
-            #masked_lm_labels.append(p.label) 
             masked_lm_labels[p.index] = p.label
             
         return output_tokens, masked_lm_labels       
 
 
-def embed_collate_fn(batch):
+def VQ2_embed_collate_fn(batch):
 
     word_padding = 1027
     phone_padding = 1024
@@ -166,15 +162,10 @@ def embed_collate_fn(batch):
             max_token_length = len(batch_token_result[i])
         if len(batch_phone_result[i])>max_phone_length:
             max_phone_length = len(batch_phone_result[i])
-    
-    #print("max_token_length:", max_token_length)
-    #print("max_phone_length:", max_phone_length)
+
 
     for i in range(0, batch_size):
 
-        #always add 0 at the end of phone_embeddings, in order to deal with start&end ids
-        #for start ids & end ids --> need discussion
-        #especially end ids..                  
         padd_amount2 = max_phone_length-batch_phone_result[i].size()[0]
         new2 = torch.LongTensor([phone_padding]*padd_amount2)
         batch_phone_result[i] = torch.cat([batch_phone_result[i], new2], dim=0)        

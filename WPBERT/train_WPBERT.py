@@ -14,35 +14,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-'''Training the WPBERT Model using VQ3 embeddings as word embeddings, CPC embeddings as phonetic embeddig'''
-
-
+'''Training the WPBERT Model using VQ3 embeddings as word embeddings, VQ2 or CPC embeddings as phonetic embeddig'''
 
 from __future__ import absolute_import, division, print_function    
 
 import argparse
-import glob
 import logging
-import os
-import pickle
+import os, sys
 import random
-import re
-import shutil
-import copy
-import time
 import traceback
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler, TensorDataset
+from torch.utils.data import DataLoader, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
-import collections
-import nltk as tk
-import sys
-import io
 from datetime import datetime
-
-#sys.stdout = io.TextIOWrapper(sys.stdout.buffer,encoding='utf-8')
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -58,34 +44,37 @@ from transformers import (
 )
 
 #Added
+#Files for Dataset
+from WPBERT.VQ3VQ2_dataset import VQ3VQ2_dataset
+from WPBERT.VQ3VQ2_dataset import VQ2_embed_collate_fn
+from WPBERT.VQ3CPC_dataset import VQ3CPC_dataset
+from WPBERT.VQ3CPC_dataset import CPC_embed_collate_fn
 
-from embed_dataset import Embed_dataset
-from WPBERT import WPBertForMaskedLM
+#Files for Models
+from .WPBERT import WPBertForMaskedLM
 from CharBERT.modeling.configuration_bert import BertConfig
-from embed_dataset import embed_collate_fn
 
 from apex.parallel import DistributedDataParallel as DDP
 
 logger = logging.getLogger(__name__)
 
-#Set Environmental variables
-os.environ["CUDA_VISIBLE_DEVICES"] = '0, 1'
+# Set Environmental variables
+# os.environ["CUDA_VISIBLE_DEVICES"] = '0, 1'
 os.environ['MASTER_ADDR'] = '127.0.0.1'
 os.environ['MASTER_PORT'] = '29500'
 
-'''
-logger.setLevel(logging.INFO)
-stream_handler = logging.StreamHandler()
-logger.addHandler(stream_handler)
-'''
 
-train_path = '/data/babymind/LibriSpeech_cpc_embed/train'
-validate_path = '/data/babymind/LibriSpeech_cpc_embed/dev'
-output_dir = "/data/babymind/WPBERT_models/CPC50/WPBERT_REP_WP"
+def load_and_cache_examples(datapath, phone_type):
+    if phone_type=="VQ2":
+        dataset = VQ3VQ2_dataset(datapath, logger=logger)
+    elif phone_type=="CPC":
+        dataset = VQ3CPC_dataset(datapath, logger=logger)
+    else: 
+        logger.error("Wrong Phone type! It should be one of VQ2 or CPC")
+        sys.exit()
 
-def load_and_cache_examples(datapath):
-    dataset = Embed_dataset(datapath, logger=logger)
     return dataset
+
 
 def set_seed(args):
     random.seed(args.seed)
@@ -100,12 +89,17 @@ def train(args, train_dataset, validation_dataset, model):
     if args.local_rank in [-1, 0]:
         tb_writer = SummaryWriter()
 
+    if args.phone_type=="VQ2":
+        collate_fn = VQ2_embed_collate_fn
+    elif args.phone_type=="CPC":
+        collate_fn=CPC_embed_collate_fn
+
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
     args.val_batch_size = args.per_gpu_val_batch_size * max(1, args.n_gpu)
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
     validate_sampler = RandomSampler(validation_dataset) if args.local_rank == -1 else DistributedSampler(validation_dataset)
-    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, collate_fn = embed_collate_fn, num_workers=32, pin_memory=True)
-    validate_dataloader =DataLoader(validation_dataset, sampler = validate_sampler, batch_size =args.val_batch_size,  collate_fn = embed_collate_fn, num_workers=32, pin_memory = True)
+    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, collate_fn = collate_fn, num_workers=32, pin_memory=True)
+    validate_dataloader =DataLoader(validation_dataset, sampler = validate_sampler, batch_size =args.val_batch_size,  collate_fn = collate_fn, num_workers=32, pin_memory = True)
 
     #for validation
     validation_losses = []
@@ -348,8 +342,17 @@ def main():
     parser = argparse.ArgumentParser()
 
     
-    parser.add_argument("--output_dir", default=output_dir, type=str,
+    parser.add_argument("--output_dir",  type=str,
                         help="The output directory where the model predictions and checkpoints will be written.")
+
+    parser.add_argument("--train_data_path",  type=str,
+                        help="The path of the training dataset.")
+
+    parser.add_argument("--validation_data_path",  type=str,
+                        help="The path of the validation dataset")
+
+    parser.add_argument("--phone_type", default="VQ2", type=str,
+                        help="The phone type to use for training. Maybe one of CPC and VQ2")
 
     ## Other parameters
     parser.add_argument("--eval_data_file", default=None, type=str,
@@ -448,7 +451,7 @@ def main():
     logger.warning("Process rank: %s, device: %s, n_gpu: %s, distributed training: %s, 16-bits training: %s",
                     args.local_rank, device, args.n_gpu, bool(args.local_rank != -1), args.fp16)
     
-    log_path = output_dir + '/log.txt'
+    log_path = args.output_dir + '/log.txt'
     file_handler =logging.FileHandler(log_path)
     logger.addHandler(file_handler)
     
@@ -477,13 +480,13 @@ def main():
 
         logger.info("loading train_dataset")
         try: 
-            train_dataset = load_and_cache_examples(train_path)
+            train_dataset = load_and_cache_examples(args.train_data_path, args.phone_type)
         except Exception:
             err = traceback.format_exc()
             logger.error(err)
             
         logger.info("loading validate dataset")
-        validation_dataset = load_and_cache_examples(validate_path)
+        validation_dataset = load_and_cache_examples(args.validation_data_path, args.phone_type)
 
         if args.local_rank == 0:
             torch.distributed.barrier()
@@ -514,7 +517,7 @@ def main():
         torch.save(args, os.path.join(args.output_dir, 'training_args.bin'))
 
         # Load a trained model and vocabulary that you have fine-tuned
-        model = CharBertForMaskedLM.from_pretrained(args.output_dir)
+        model = WPBertForMaskedLM.from_pretrained(args.output_dir)
         model.to(args.device)
 
     return 
